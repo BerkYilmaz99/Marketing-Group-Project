@@ -1,0 +1,240 @@
+---
+title: Marketing Data Analysis
+author: Berk Yılmaz
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    toc: true
+    toc_depth: 4
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, error = FALSE)
+```
+
+```{r}
+#Importing the dataset and loading necessary packages
+library(readr)
+library(dplyr)
+library(lmtest)
+library(ggplot2)
+library(tidyr)
+library(patchwork)
+library(corrplot)
+
+Survey_Data <- read_csv("Survey_Results.csv")
+
+Survey_Data
+```
+
+# Removing Redundant Columns
+
+
+```{r}
+Survey_Data <- Survey_Data %>% select(-"StartDate", -"EndDate", -"Status", -"IPAddress", -"Progress", -"Duration (in seconds)", -"Finished", -"RecordedDate", -"ResponseId", -"RecipientLastName", -"RecipientEmail", -"ExternalReference", -"LocationLatitude", -"LocationLongitude", -"DistributionChannel", -"UserLanguage", -"Q_RecaptchaScore", -"QID34", -"RecipientFirstName")
+  
+Survey_Data <- Survey_Data[-c(1, 2), ]
+
+```
+
+# Removing every column with the word "TEXT" in them because we cannot perform statistical analysis on sentences.
+
+```{r}
+Survey_Data <- Survey_Data %>% select(-contains("TEXT"))
+
+#Turn every column except Question 8 and 16 into numeric
+Survey_Data <- Survey_Data %>%
+  mutate(across(.cols = -c(Q8, Q16), .fns = ~ as.numeric(as.character(.))))
+
+#Giving logical names to each question's column for ease of interpretation
+Survey_Data <- Survey_Data %>%
+  rename(
+    Age = Q1,
+    Gender = Q2,
+    Place_of_birth = Q3,
+    Reg_Coca = Q4,
+    Reg_SoftBev = Q5,
+    Why_SoftBev = Q6, 
+    Why_No_SoftBev = Q7, 
+    Which_Softdrink_reg = Q8,
+    Try_New_Softdrink = Q9,
+    Sit_New_Softdrink = Q10,
+    Color_importance = Q11,
+    Colorful_or_Dark = Q12,
+    Packaging = Q13,
+    Origin_importance = Q14,
+    Foreign_bev = Q15,
+    Foreign_bev_why = Q16,
+    History_domestic = Q17,
+    Fernandes_familiar = Q18, 
+    Fernandes_origin = Q19,
+    Fernandes_continent = Q20,
+    Fernandes_customer = Q21,
+    Fernandes_motivation = Q22,
+    Fernandes_flavour = Q23
+  )
+
+```
+
+# Now, we will take the crucial step of reversing the order of numbers for a certain column by mapping each value to its new counterpart in the reversed order. The reason why we do this is to uniformize the data where features that positively impact Fernandes consumption will take on larger positive numbers and vice versa. This will make the interpretation of the coefficients in the sample regression much simpler.
+
+```{r}
+# Define the reverse function
+reverse_values <- function(column, max_value) {
+  column <- as.numeric(as.character(column))
+  return(max_value + 1 - column)
+}
+
+# Apply the reversal function to the Q4, Q5 columns and replacing the original column
+Survey_Data$Reg_Coca <- reverse_values(Survey_Data$Reg_Coca, 4)
+Survey_Data$Reg_SoftBev <- reverse_values(Survey_Data$Reg_SoftBev, 4)
+Survey_Data$Fernandes_familiar <- reverse_values(Survey_Data$Fernandes_familiar, 3)
+Survey_Data$Fernandes_origin <- reverse_values(Survey_Data$Fernandes_origin, 4)
+Survey_Data$Fernandes_customer <- reverse_values(Survey_Data$Fernandes_customer, 3)
+
+# A display of the updated Survey_Data
+Survey_Data
+
+```
+
+# Running the Regression
+
+```{r}
+
+model <- lm(Fernandes_customer ~ Age + Gender + Place_of_birth + Reg_Coca + Reg_SoftBev + Try_New_Softdrink + Sit_New_Softdrink + Color_importance + Colorful_or_Dark + Packaging + Origin_importance + Fernandes_origin + Fernandes_motivation + Fernandes_flavour + Fernandes_familiar + Fernandes_continent, data = Survey_Data)
+
+summary(model)
+
+```
+
+# Testing for Heteroskedasticity
+
+```{r}
+bptest(model)
+```
+
+Heteroskedasticity is not present. So no need for robust standard errors.
+
+
+# Visualizing the Relationship
+
+
+```{r}
+#The relationship etween Fernandes brand Familiarity and Consumption across different age groups
+Survey_Data %>% group_by(Age) %>% summarise(mean_familiarity = mean(Fernandes_familiar), mean_consumption = mean(Fernandes_customer))
+
+```
+
+# Bar Chart of Fernandes Brand Familarity and Consumption across Age Groups
+
+```{r}
+# Calculating mean familiarity and consumption by age
+age_group_summary <- Survey_Data %>%
+  group_by(Age) %>%
+  summarise(mean_familiarity = mean(Fernandes_familiar, na.rm = TRUE),
+            mean_consumption = mean(Fernandes_customer, na.rm = TRUE))
+
+# Creating the data frame that we will use for this graph
+age_group_long <- age_group_summary %>%
+  pivot_longer(cols = c(mean_familiarity, mean_consumption), names_to = "Variable", values_to = "Value")
+
+# Personally choosing the color palette
+colors <- c("mean_familiarity" = "#6BAED6", "mean_consumption" = "#FB6A4A")
+
+# The Bar Chart
+ggplot(age_group_long, aes(x = factor(Age), y = Value, fill = Variable)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  labs(title = "Fernandes Brand Familiarity and Consumption Across Age Groups",
+       x = "Age Group",
+       y = "Mean Value",
+       fill = "Metric") +
+  theme(axis.text.x = element_text(hjust = 1),
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.title = element_text(face = "bold"),
+        legend.position = "bottom")
+```
+
+# Sample Regression for Those Who Correctly Identified the Continent of Suriname
+
+```{r}
+# Filtering the data for respondents who correctly identified the location
+correct_respondents <- Survey_Data %>% filter(Fernandes_continent == 4)
+
+# Sample Regression
+model_correct <- lm(Fernandes_customer ~ Age + Gender + Place_of_birth + Reg_Coca + Reg_SoftBev + Try_New_Softdrink + Sit_New_Softdrink + Color_importance + Colorful_or_Dark + Packaging + Origin_importance + Fernandes_origin + Fernandes_motivation + Fernandes_flavour + Fernandes_familiar + Fernandes_origin, data = correct_respondents)
+
+# Summary
+summary(model_correct)
+
+```
+
+The coefficient for Fernandes_familiar is even more negative than in the regression for every respondant, which indicates that for individuals who correctly identified Suriname's location, there's an even more negative chance of them being a Fernandes customer if they are familiar with the brand. This may be caused by possible prejudice.
+
+# Bar chart of Fernandes Familiarity and Consumption across age groups for those who correctly identified Suriname
+
+```{r}
+correct_respondents <- Survey_Data %>% filter(Fernandes_continent == 4)
+
+age_group_summary_correct <- correct_respondents %>%
+  group_by(Age) %>%
+  summarise(mean_familiarity = mean(Fernandes_familiar, na.rm = TRUE),
+            mean_consumption = mean(Fernandes_customer, na.rm = TRUE))
+
+age_group_long_correct <- age_group_summary_correct %>%
+  pivot_longer(cols = c(mean_familiarity, mean_consumption), names_to = "Variable", values_to = "Value")
+
+colors <- c("mean_familiarity" = "#6BAED6", "mean_consumption" = "#FB6A4A")
+
+ggplot(age_group_long_correct, aes(x = factor(Age), y = Value, fill = Variable)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  scale_fill_manual(values = colors) +
+  theme_minimal() +
+  labs(title = "Fernandes Brand Familiarity and Consumption Across Age Groups (Correct Respondents)",
+       x = "Age Group",
+       y = "Mean Value",
+       fill = "Metric") +
+  theme(axis.text.x = element_text(hjust = 1),
+        plot.title = element_text(hjust = 0.3, face = "bold"),
+        legend.title = element_text(face = "bold"),
+        legend.position = "bottom")
+
+```
+
+# Visualization of being a Fernandes Customer across Different Continents of Birth
+
+```{r}
+# Calculate mean consumption by origin category
+mean_consumption_by_origin <- Survey_Data %>%
+  group_by(Place_of_birth) %>%
+  summarise(mean_consumption = mean(Fernandes_customer, na.rm = TRUE))
+
+# Plot the bar chart
+ggplot(mean_consumption_by_origin, aes(x = Place_of_birth, y = mean_consumption, fill = Place_of_birth)) +
+  geom_bar(stat = "identity", color = "black") +
+  theme_minimal() +
+  labs(title = "Mean of Fernandes Consumption by Origin",
+       x = "Place of Birth",
+       y = "Mean Consumption") +
+  theme(axis.text.x = element_text(hjust = 1),
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.position = "none")
+```
+Where 1 stands for Asia, 2 for Africa, 3 for North America, 4 for South America and 6 for Europe.
+
+
+# The Correlation Matrix 
+
+```{r}
+# Ensuring we only calculate correlations for numeric columns
+numeric_columns <- Survey_Data %>% select(where(is.numeric))
+cor_matrix <- cor(numeric_columns, use = "complete.obs")
+
+# The Corr Matrix
+corrplot(cor_matrix, method = "circle", type = "upper", tl.col = "black", tl.cex = 0.8)
+
+
+```
+
